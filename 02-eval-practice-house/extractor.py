@@ -13,7 +13,9 @@ output_format 是较新的 API，部分模型中转站不支持（会返回普�
 import anthropic
 from pydantic import BaseModel
 
-client = anthropic.Anthropic()     # 自动读取环境变量（ANTHROPIC_API_KEY 或 AUTH_TOKEN/BASE_URL）
+# 【生产盔甲·第 1 件：超时】30 秒没回应就主动挂断，转入重试。
+# 没有它：网络一卡，单次调用可能挂住几分钟，整场评测跟着卡死。
+client = anthropic.Anthropic(timeout=30.0)   # 自动读取环境变量（ANTHROPIC_API_KEY 或 AUTH_TOKEN/BASE_URL）
 MODEL = "claude-opus-4-8"          # 与课程用同一个模型，分数才有可比性
 
 # ★★★ 第 2 关你唯一允许修改的地方 ★★★
@@ -53,16 +55,46 @@ class Listing(BaseModel):
     parking: bool | None = None      # 车位：true 有 / false 没有 / null 没提到
 
 
+# 【生产盔甲·第 2 件：重试 + 限流退避】（AI应用开发详解教程 第 7 章）
+# 原则：429 限流 / 5xx 服务错 / 超时 / 断连 → 等一等再试（对方的问题，再试就好）；
+#       4xx 参数错（如 400/401）→ 立刻向上抛，绝不重试（自己的问题，重试一万次也是错）。
+def call_with_retry(make_request, max_retries=3, base_delay=1.0):
+    """把一次 API 调用包上"失败自动重试"的外壳。
+    make_request：一个无参函数（真正发请求的那行代码）；
+    指数退避：第 1 次等 1s、第 2 次等 2s、第 3 次等 4s，节奏翻倍。"""
+    import time
+    last_error = None
+    for attempt in range(max_retries + 1):          # 首次 + 最多重试 3 次
+        try:
+            return make_request()                    # 正常路径：直接返回结果
+        except anthropic.RateLimitError as e:        # 429：服务器叫我们等
+            # 优先读服务器指定的等待秒数（retry-after 响应头），没有就按退避节奏
+            wait = float(e.response.headers.get("retry-after", base_delay * 2 ** attempt))
+        except anthropic.APIStatusError as e:        # HTTP 状态码错误
+            if e.status_code < 500:
+                raise                                # 4xx：自己的错，不重试
+            wait = base_delay * 2 ** attempt         # 5xx：服务器的问题，退避重试
+        except (anthropic.APIConnectionError, anthropic.APITimeoutError):
+            wait = base_delay * 2 ** attempt         # 网络问题：退避重试
+        if attempt == max_retries:
+            raise                                    # 重试用尽：向上抛，让调用方处理
+        last_error = e
+        print(f"[重试] 第 {attempt + 1} 次调用失败（{type(e).__name__}），{wait:.1f}s 后重试…")
+        time.sleep(wait)
+    raise last_error                                 # 理论到不了这里，保险起见
+
+
 def _create(messages):
-    """发一次"强制用工具作答"的请求。tool_choice 声明模型必须调 extract_listing。"""
-    return client.messages.create(
+    """发一次"强制用工具作答"的请求。tool_choice 声明模型必须调 extract_listing。
+    【生产盔甲】真正的调用被 call_with_retry 包住——闪断/限流自动重试，评测不再中断。"""
+    return call_with_retry(lambda: client.messages.create(
         model=MODEL,
         max_tokens=1000,
         system=SYSTEM_PROMPT,
         messages=messages,
         tools=[LISTING_TOOL],
         tool_choice={"type": "tool", "name": "extract_listing"},
-    )
+    ))
 
 
 def extract_listing(text: str) -> Listing:
