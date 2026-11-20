@@ -51,7 +51,7 @@ public class JavaClientDemo {
                 return post(body);
             } catch (Retryable e) {                       // 可重试的失败（超时/断连/429/5xx）
                 if (attempt == maxRetries) {
-                    // 盔甲③降级：重试用尽也不抛异常堆栈给用户，给一句人话
+                    // 盔甲③降级：重试用尽也不抛异常堆栈给用户，给一句人话w
                     return "{\"ok\":false,\"error\":\"服务暂不可用，请稍后再试\"}";
                 }
                 long wait = baseDelay * (1L << attempt);  // 1000 → 2000 → 4000 ms
