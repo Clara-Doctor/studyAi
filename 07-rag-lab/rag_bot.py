@@ -10,6 +10,7 @@
 """
 import anthropic
 from similarity import tokenize, jaccard     # 复用关2的打分器
+from armor import call_with_retry            # 关7：公共盔甲（超时已在 client 上）
 
 MODEL = "claude-opus-4-8"
 client = anthropic.Anthropic(timeout=30.0)    # 盔甲习惯：超时从第一天就带着
@@ -41,14 +42,14 @@ def answer(question):
     chunks = load_chunks()
     top = retrieve(question, chunks)
     context = "\n---\n".join(top)
-    resp = client.messages.create(
+    resp = call_with_retry(lambda: client.messages.create(
         model=MODEL,
         max_tokens=500,
         system=("你是房源客服。只根据【参考资料】回答问题；"
                 "参考资料里没有的信息，老实回答'这个资料里没有提到'，禁止编造。"),
         messages=[{"role": "user",
                    "content": f"【参考资料】\n{context}\n\n【问题】{question}"}],
-    )
+    ))
     # 返回的 content 是块列表（思考块/文字块混排），必须按类型过滤，不能按位置猜
     return next(b.text for b in resp.content if b.type == "text")
 

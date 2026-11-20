@@ -30,3 +30,10 @@
 - 实验B 三次投票：[5,5,5] → 分数稳定 ✅
 - 踩坑1个：judge.py 的 REF 在 __main__ 里，import 拿不到——要被 import 的东西放模块顶层
 - 使用守则：即便校准通过，生产上仍要"评3次取中位数 + 人工抽查10%"双保险
+
+## 关7+8 盔甲复刻 + 缓存降级（2026-11-12）
+- armor.py：call_with_retry 公共模块（DRY—— extractor/rag_bot 两处复用同一份）
+- rag_bot 已挂盔甲：call_with_retry(lambda: create(...))
+- 缓存实测：同问题两次提问，API 调用 1 次（第二次命中缓存 0 调用）
+- 降级实测：主模型指坏地址 → APIConnectionError → 自动切 haiku 成功
+- 踩坑2个：max_tokens=300 被思考块吃光正文没出生（StopIteration）；next() 要给默认值
